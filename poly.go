@@ -5,75 +5,47 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const workersCnt = 40
 
 type (
+	opReq[ReqType any] struct {
+		opKey string
+		req   ReqType
+	}
+
 	WorkerPool[ReqType, RespType any] struct {
-		ctx      context.Context
-		opCtx    context.Context
-		opCancel context.CancelCauseFunc
+		ctx context.Context
 
-		in  chan ReqType
-		out chan RespType
+		in  chan opReq[ReqType]
+		ops map[string]*Op[RespType]
 
-		metrics metrics
+		fn func(context.Context, ReqType) (RespType, error)
 
-		opCounter atomic.Int64
-		mu        sync.RWMutex
-	}
-
-	metrics struct {
-		opDone      atomic.Int64
-		calcTimeSum atomic.Int64
-	}
-
-	Metrics struct {
-		OperationsTotal           int
-		AverageProcessingDuration time.Duration
+		mu sync.RWMutex
 	}
 )
 
 func New[ReqType, RespType any](ctx context.Context, fn func(context.Context, ReqType) (RespType, error)) *WorkerPool[ReqType, RespType] {
-	opCtx, opCancel := context.WithCancelCause(ctx)
-
 	wp := &WorkerPool[ReqType, RespType]{
-		ctx:      ctx,
-		opCtx:    opCtx,
-		opCancel: opCancel,
-		in:       make(chan ReqType, workersCnt),
-		out:      make(chan RespType, workersCnt),
+		ctx: ctx,
+		in:  make(chan opReq[ReqType], workersCnt),
+		ops: make(map[string]*Op[RespType]),
+		fn:  fn,
 	}
 
 	for i := 0; i < workersCnt; i++ {
 		go func() {
 			for wp.ctx.Err() == nil {
-				func() {
-					defer wp.opCounter.Add(-1)
-					defer wp.metrics.opDone.Add(1)
-
-					select {
-					case <-wp.ctx.Done():
-						return
-					case req := <-wp.in:
-						st := time.Now()
-
-						res, err := fn(wp.opCtx, req)
-						wp.metrics.calcTimeSum.Add(int64(time.Since(st)))
-
-						if err != nil {
-							wp.opCancel(err)
-							return
-						}
-
-						select {
-						case wp.out <- res:
-						case <-wp.opCtx.Done():
-						case <-wp.ctx.Done():
-						}
-					}
-				}()
+				select {
+				case <-wp.ctx.Done():
+					return
+				case opReq := <-wp.in:
+					wp.handle(opReq.req, wp.ops[opReq.opKey])
+				}
 			}
 		}()
 	}
@@ -81,101 +53,77 @@ func New[ReqType, RespType any](ctx context.Context, fn func(context.Context, Re
 	return wp
 }
 
-func (wp *WorkerPool[ReqType, RespType]) Metrics() (m Metrics) {
-	m = Metrics{
-		OperationsTotal:           int(wp.metrics.opDone.Load()),
-		AverageProcessingDuration: time.Duration(wp.metrics.calcTimeSum.Load() / max(1, wp.metrics.opDone.Load())),
+func (wp *WorkerPool[ReqType, RespType]) NewOperation(ctx context.Context) (*Op[RespType], func()) {
+	opCtx, cancel := context.WithCancelCause(ctx)
+
+	op := &Op[RespType]{
+		key:    uuid.New().String(),
+		ctx:    opCtx,
+		cancel: cancel,
+
+		out:         make(chan RespType),
+		RWMutex:     new(sync.RWMutex),
+		r:           new(atomic.Int64),
+		tDone:       new(atomic.Int64),
+		calcTimeSum: new(atomic.Int64),
 	}
 
-	wp.metrics.opDone.Store(0)
-	wp.metrics.calcTimeSum.Store(0)
+	endFunc := func() {
+		wp.mu.Lock()
+		defer wp.mu.Unlock()
 
-	return m
-}
-
-func (wp *WorkerPool[ReqType, RespType]) Wait() (m Metrics) {
-	defer func() {
-		m = Metrics{
-			OperationsTotal:           int(wp.metrics.opDone.Load()),
-			AverageProcessingDuration: time.Duration(wp.metrics.calcTimeSum.Load() / max(1, wp.metrics.opDone.Load())),
-		}
-
-		wp.metrics.opDone.Store(0)
-		wp.metrics.calcTimeSum.Store(0)
-	}()
-
-	for !wp.opCounter.CompareAndSwap(0, 0) {
-		select {
-		case <-wp.ctx.Done():
-			return
-
-		case <-wp.opCtx.Done():
-			return
-
-		case <-wp.out:
-		}
+		op.cancel(ErrOperationEnded)
+		close(op.out)
+		delete(wp.ops, op.key)
 	}
 
-	return m
+	wp.ops[op.key] = op
+
+	return op, endFunc
 }
 
-func (wp *WorkerPool[ReqType, RespType]) Results() <-chan RespType {
-	out := make(chan RespType)
+func (wp *WorkerPool[ReqType, RespType]) AddRequest(req ReqType, o *Op[RespType]) {
+	o.r.Add(1)
 
 	go func() {
-		defer close(out)
-
-		for !wp.opCounter.CompareAndSwap(0, 0) {
-			select {
-			case <-wp.ctx.Done():
-				return
-			case out <- <-wp.out:
-			}
-		}
-	}()
-
-	return out
-}
-
-func (wp *WorkerPool[ReqType, RespType]) AddRequest(req ReqType) {
-	wp.opCounter.Add(1)
-	go func() {
 		select {
+		case wp.in <- opReq[ReqType]{
+			opKey: o.key,
+			req:   req,
+		}:
+
 		case <-wp.ctx.Done():
-		case wp.in <- req:
 		}
 	}()
-
 }
 
-func (wp *WorkerPool[ReqType, RespType]) UpdCtx(ctx context.Context) {
-	wp.mu.Lock()
-	defer wp.mu.Unlock()
-
-	ctx, cancel := context.WithCancelCause(ctx)
-
-	wp.opCtx = ctx
-	wp.opCancel = cancel
-}
-
-func (wp *WorkerPool[ReqType, RespType]) OpCtx() context.Context {
-	wp.mu.RLock()
-	defer wp.mu.RUnlock()
-
-	return wp.opCtx
-}
-
-func (wp *WorkerPool[ReqType, RespType]) Err() error {
-	wp.mu.Lock()
-	defer wp.mu.Unlock()
-
-	if wp.opCtx.Err() != nil {
-		defer func() {
-			wp.opCtx = context.Background()
-		}()
-
-		return context.Cause(wp.opCtx)
+func (wp *WorkerPool[ReqType, RespType]) handle(req ReqType, op *Op[RespType]) {
+	if op == nil {
+		return
 	}
 
-	return nil
+	if op.ctx.Err() != nil {
+		return
+	}
+
+	st := time.Now()
+
+	res, err := wp.fn(op.ctx, req)
+	op.calcTimeSum.Add(int64(time.Since(st)))
+
+	if err != nil {
+		op.cancel(err)
+		return
+	}
+
+	op.tDone.Add(1)
+	select {
+	case op.out <- res:
+
+	case <-op.ctx.Done():
+		op.tDone.Add(-1)
+
+	case <-wp.ctx.Done():
+		op.tDone.Add(-1)
+	}
 }
