@@ -56,8 +56,14 @@ func (o *Op[RespType]) Results() <-chan RespType {
 
 		for !o.r.CompareAndSwap(0, 0) {
 			select {
-			case out <- <-o.out:
-				o.r.Add(-1)
+			case res := <-o.out:
+				select {
+				case out <- res:
+					o.r.Add(-1)
+
+				case <-o.ctx.Done():
+					return
+				}
 
 			case <-o.ctx.Done():
 				return

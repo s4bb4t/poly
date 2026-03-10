@@ -44,7 +44,12 @@ func New[ReqType, RespType any](ctx context.Context, fn func(context.Context, Re
 				case <-wp.ctx.Done():
 					return
 				case opReq := <-wp.in:
-					wp.handle(opReq.req, wp.ops[opReq.opKey])
+
+					wp.mu.RLock()
+					op := wp.ops[opReq.opKey]
+					wp.mu.RUnlock()
+
+					wp.handle(opReq.req, op)
 				}
 			}
 		}()
