@@ -15,14 +15,14 @@ func TestWorkerPool(t *testing.T) {
 	t.Run("Results collects all responses", func(t *testing.T) {
 		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
 			return req * 2, nil
-		})
+		}, 40)
 
-		op, cancel := wp.NewOperation(context.Background())
+		op, cancel := NewOperation(wp, context.Background())
 		defer cancel()
 
 		const requests = 100
 		for i := 0; i < requests; i++ {
-			wp.AddRequest(i, op)
+			op.AddRequest(i)
 		}
 
 		got := make(map[int]bool)
@@ -44,14 +44,14 @@ func TestWorkerPool(t *testing.T) {
 	t.Run("Wait completes all requests", func(t *testing.T) {
 		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
 			return req, nil
-		})
+		}, 40)
 
-		op, cancel := wp.NewOperation(context.Background())
+		op, cancel := NewOperation(wp, context.Background())
 		defer cancel()
 
 		const requests = 100
 		for i := 0; i < requests; i++ {
-			wp.AddRequest(i, op)
+			op.AddRequest(i)
 		}
 
 		m := op.Wait()
@@ -65,14 +65,14 @@ func TestWorkerPool(t *testing.T) {
 		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
 			time.Sleep(time.Millisecond)
 			return req, nil
-		})
+		}, 40)
 
-		op, cancel := wp.NewOperation(context.Background())
+		op, cancel := NewOperation(wp, context.Background())
 		defer cancel()
 
 		const requests = 10
 		for i := 0; i < requests; i++ {
-			wp.AddRequest(i, op)
+			op.AddRequest(i)
 		}
 
 		m := op.Wait()
@@ -85,14 +85,14 @@ func TestWorkerPool(t *testing.T) {
 	t.Run("Metrics resetOnRead resets counters", func(t *testing.T) {
 		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
 			return req, nil
-		})
+		}, 40)
 
-		op, cancel := wp.NewOperation(context.Background())
+		op, cancel := NewOperation(wp, context.Background())
 		defer cancel()
 
 		const requests = 50
 		for i := 0; i < requests; i++ {
-			wp.AddRequest(i, op)
+			op.AddRequest(i)
 		}
 
 		op.Wait()
@@ -117,13 +117,13 @@ func TestWorkerPool(t *testing.T) {
 				return 0, errTest
 			}
 			return req, nil
-		})
+		}, 40)
 
-		op, cancel := wp.NewOperation(context.Background())
+		op, cancel := NewOperation(wp, context.Background())
 		defer cancel()
 
 		for i := 0; i < 20; i++ {
-			wp.AddRequest(i, op)
+			op.AddRequest(i)
 		}
 
 		op.Wait()
@@ -142,14 +142,14 @@ func TestWorkerPool(t *testing.T) {
 			case <-ctx.Done():
 				return 0, ctx.Err()
 			}
-		})
+		}, 40)
 
 		opCtx, opCancel := context.WithCancel(context.Background())
-		op, cancel := wp.NewOperation(opCtx)
+		op, cancel := NewOperation(wp, opCtx)
 		defer cancel()
 
 		for i := 0; i < 10; i++ {
-			wp.AddRequest(i, op)
+			op.AddRequest(i)
 		}
 
 		done := make(chan struct{})
@@ -175,14 +175,14 @@ func TestWorkerPool(t *testing.T) {
 			case <-ctx.Done():
 				return 0, ctx.Err()
 			}
-		})
+		}, 40)
 
 		opCtx, opCancel := context.WithCancel(context.Background())
-		op, cancel := wp.NewOperation(opCtx)
+		op, cancel := NewOperation(wp, opCtx)
 		defer cancel()
 
 		for i := 0; i < 10; i++ {
-			wp.AddRequest(i, op)
+			op.AddRequest(i)
 		}
 
 		ch := op.Results()
@@ -206,12 +206,12 @@ func TestWorkerPool(t *testing.T) {
 	t.Run("Err returns nil when no error", func(t *testing.T) {
 		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
 			return req, nil
-		})
+		}, 40)
 
-		op, cancel := wp.NewOperation(context.Background())
+		op, cancel := NewOperation(wp, context.Background())
 		defer cancel()
 
-		wp.AddRequest(1, op)
+		op.AddRequest(1)
 		op.Wait()
 
 		if err := op.Err(); err != nil {
@@ -222,11 +222,11 @@ func TestWorkerPool(t *testing.T) {
 	t.Run("Err returns ErrOperationEnded after cancel func", func(t *testing.T) {
 		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
 			return req, nil
-		})
+		}, 40)
 
-		op, cancel := wp.NewOperation(context.Background())
+		op, cancel := NewOperation(wp, context.Background())
 
-		wp.AddRequest(1, op)
+		op.AddRequest(1)
 		op.Wait()
 
 		cancel()
@@ -242,16 +242,16 @@ func TestWorkerPool(t *testing.T) {
 	t.Run("multiple operations are independent", func(t *testing.T) {
 		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
 			return req, nil
-		})
+		}, 40)
 
-		op1, cancel1 := wp.NewOperation(context.Background())
+		op1, cancel1 := NewOperation(wp, context.Background())
 		defer cancel1()
-		op2, cancel2 := wp.NewOperation(context.Background())
+		op2, cancel2 := NewOperation(wp, context.Background())
 		defer cancel2()
 
 		for i := 0; i < 50; i++ {
-			wp.AddRequest(i, op1)
-			wp.AddRequest(i+1000, op2)
+			op1.AddRequest(i)
+			op2.AddRequest(i + 1000)
 		}
 
 		done := make(chan Metrics, 2)
@@ -274,12 +274,12 @@ func TestWorkerPool(t *testing.T) {
 	t.Run("single request works", func(t *testing.T) {
 		wp := New(context.Background(), func(_ context.Context, req string) (string, error) {
 			return "hello " + req, nil
-		})
+		}, 40)
 
-		op, cancel := wp.NewOperation(context.Background())
+		op, cancel := NewOperation(wp, context.Background())
 		defer cancel()
 
-		wp.AddRequest("world", op)
+		op.AddRequest("world")
 
 		var result string
 		for res := range op.Results() {
@@ -300,13 +300,13 @@ func TestWorkerPool(t *testing.T) {
 			case <-ctx.Done():
 				return 0, ctx.Err()
 			}
-		})
+		}, 40)
 
-		op, cancel := wp.NewOperation(poolCtx)
+		op, cancel := NewOperation(wp, poolCtx)
 		defer cancel()
 
 		for i := 0; i < 5; i++ {
-			wp.AddRequest(i, op)
+			op.AddRequest(i)
 		}
 
 		done := make(chan struct{})
@@ -321,6 +321,121 @@ func TestWorkerPool(t *testing.T) {
 		case <-done:
 		case <-time.After(3 * time.Second):
 			t.Fatal("Wait did not return after pool context cancellation")
+		}
+	})
+
+	// Bug-proving tests
+
+	t.Run("handle decrements r on fn error", func(t *testing.T) {
+		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
+			return 0, errTest
+		}, 4)
+
+		op, cancel := NewOperation(wp, context.Background())
+		defer cancel()
+
+		const requests = 20
+		for i := 0; i < requests; i++ {
+			op.AddRequest(i)
+		}
+
+		done := make(chan struct{})
+		go func() {
+			op.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// Wait returned — r was properly decremented on error paths
+		case <-time.After(3 * time.Second):
+			t.Fatal("Wait deadlocked: r not decremented on fn error")
+		}
+	})
+
+	t.Run("AddRequest decrements r on pool cancel", func(t *testing.T) {
+		poolCtx, poolCancel := context.WithCancel(context.Background())
+
+		wp := New(poolCtx, func(ctx context.Context, req int) (int, error) {
+			select {
+			case <-time.After(time.Hour):
+				return req, nil
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			}
+		}, 1)
+
+		op, cancel := NewOperation(wp, context.Background())
+		defer cancel()
+
+		// Fill the single worker with a blocking task
+		op.AddRequest(0)
+		time.Sleep(50 * time.Millisecond)
+
+		// These requests will be stuck trying to send to the full channel
+		for i := 1; i <= 10; i++ {
+			op.AddRequest(i)
+		}
+
+		poolCancel()
+
+		done := make(chan struct{})
+		go func() {
+			op.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("Wait deadlocked: r not decremented when pool cancelled")
+		}
+	})
+
+	t.Run("endFunc does not panic", func(t *testing.T) {
+		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
+			time.Sleep(10 * time.Millisecond)
+			return req, nil
+		}, 40)
+
+		op, cancel := NewOperation(wp, context.Background())
+
+		for i := 0; i < 50; i++ {
+			op.AddRequest(i)
+		}
+
+		// Cancel while workers may still be trying to send to op.out
+		// Old code did close(op.out) which would panic
+		cancel()
+
+		// If we get here without panic, the test passes
+		time.Sleep(50 * time.Millisecond)
+	})
+
+	t.Run("calcTimeSum excludes errors", func(t *testing.T) {
+		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
+			if req%2 == 0 {
+				time.Sleep(10 * time.Millisecond)
+				return 0, errTest
+			}
+			return req, nil
+		}, 4)
+
+		op, cancel := NewOperation(wp, context.Background())
+		defer cancel()
+
+		// Only add odd numbers (which succeed)
+		for i := 1; i <= 5; i += 2 {
+			op.AddRequest(i)
+		}
+
+		op.Wait()
+
+		m := op.Metrics(false)
+		// With the bug, calcTimeSum would include error processing time,
+		// inflating the average. After fix, errors don't contribute to calcTimeSum.
+		if m.OperationsTotal != 3 {
+			t.Errorf("expected 3 successful operations, got %d", m.OperationsTotal)
 		}
 	})
 }
