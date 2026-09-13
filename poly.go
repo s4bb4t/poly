@@ -25,7 +25,18 @@ type WorkerPool[ReqType, RespType any] struct {
 // Workers start immediately and run until ctx is cancelled.
 //
 //	wp := poly.New(ctx, fetchURL, 20)
+//
+// New panics if fn is nil or workersCnt is not positive: a pool with no
+// workers accepts requests and never runs them, which surfaces much
+// later as an unexplained hang.
 func New[ReqType, RespType any](ctx context.Context, fn func(context.Context, ReqType) (RespType, error), workersCnt int) *WorkerPool[ReqType, RespType] {
+	if fn == nil {
+		panic("poly: New called with a nil function")
+	}
+	if workersCnt < 1 {
+		panic("poly: New called with workersCnt < 1")
+	}
+
 	wp := &WorkerPool[ReqType, RespType]{
 		ctx: ctx,
 		in:  make(chan func(), workersCnt),
@@ -48,9 +59,13 @@ func New[ReqType, RespType any](ctx context.Context, fn func(context.Context, Re
 	return wp
 }
 
-// NewOperation creates an independent [Op] bound to the pool.
+// NewOperation creates an independent [Op] bound to the pool, configured
+// by opts (see [WithContinueOnError], [WithMaxQueue], [WithRejectOnFull]).
+//
 // The returned end function cancels the operation with [ErrOperationEnded]
-// and must be called when the operation is no longer needed.
+// and must be called when the operation is no longer needed: it stops the
+// operation's sender goroutine. It is not a completion signal — use
+// [Op.Done] for that.
 //
 // Each Op gets a dedicated sender goroutine that batches calls to
 // [Op.AddRequest] and feeds them into the pool's worker channel.
@@ -58,6 +73,15 @@ func New[ReqType, RespType any](ctx context.Context, fn func(context.Context, Re
 //
 //	op, end := poly.NewOperation(ctx, wp)
 //	defer end()
+//
+//	for _, req := range reqs {
+//		op.AddRequest(req)
+//	}
+//	op.Done()
+//
+//	for res := range op.Results() {
+//		// ...
+//	}
 func NewOperation[ReqType, RespType any](ctx context.Context, wp *WorkerPool[ReqType, RespType], opts ...Option) (*Op[ReqType, RespType], func()) {
 	opCtx, cancel := context.WithCancelCause(ctx)
 
@@ -180,10 +204,10 @@ func (wp *WorkerPool[ReqType, RespType]) handle(req ReqType, op *Op[ReqType, Res
 }
 
 // call invokes the user-supplied function and converts a panic into a
-// [PanicError]. Without this, a panic in fn would unwind the worker
-// goroutine and kill it: the pool would silently shrink from N workers
-// to N-1, then to zero, and every operation would hang with no error
-// reported anywhere.
+// [PanicError]. poly runs code it does not own on goroutines the caller
+// cannot see, so without this an ordinary bug in fn would unwind a
+// worker goroutine and take the whole process down — with no error on
+// the Op and no chance for the caller to react.
 func (wp *WorkerPool[ReqType, RespType]) call(ctx context.Context, req ReqType) (res RespType, err error, dur time.Duration) {
 	st := time.Now()
 
