@@ -27,6 +27,12 @@ type (
 		// request is recorded instead of cancelling the operation.
 		continueOnError bool
 
+		// closed is set by [Op.Done] and means "no further requests will
+		// be submitted". Together with r == 0 it is what makes an
+		// operation finished; noMore wakes consumers when it flips.
+		closed atomic.Bool
+		noMore chan struct{}
+
 		// r is the number of in-flight requests (queued + processing + awaiting
 		// consumption). Wait and Results decrement it when they consume a result;
 		// error and cancellation paths in handle and the sender goroutine
@@ -72,10 +78,10 @@ type (
 // AddRequest submits a request for processing by the pool.
 // It is safe to call from multiple goroutines.
 //
-// It reports whether the request was accepted. A request is refused once
-// the operation or the pool context is cancelled (see [Op.Err] for the
-// reason), or when the queue is full and the operation was created with
-// [WithRejectOnFull].
+// It reports whether the request was accepted. A request is refused
+// after [Op.Done], once the operation or the pool context is cancelled
+// (see [Op.Err] for the reason), or when the queue is full and the
+// operation was created with [WithRejectOnFull].
 //
 // By default the queue is unbounded and AddRequest never blocks; with
 // [WithMaxQueue] it applies backpressure and blocks while the queue is
@@ -84,20 +90,74 @@ func (o *Op[ReqType, RespType]) AddRequest(req ReqType) bool {
 	return o.submit(req)
 }
 
-// Wait blocks until all submitted requests have been processed or the
-// operation context is cancelled. Results are drained internally (not
-// forwarded to the caller). On successful completion it returns the
-// accumulated [Metrics]; on cancellation it returns the zero value.
+// Done declares that no further requests will be submitted. It is what
+// lets [Op.Wait] and [Op.Results] tell "everything is processed" apart
+// from "nothing has been submitted yet", so it must be called on every
+// operation that is waited on:
+//
+//	for _, req := range reqs {
+//		op.AddRequest(req)
+//	}
+//	op.Done()
+//
+//	for res := range op.Results() { ... }
+//
+// Done is idempotent and safe to call from any goroutine, but it must
+// not race with [Op.AddRequest]: every AddRequest has to return before
+// Done is called, exactly as with [sync.WaitGroup.Add] and Wait. Later
+// requests are refused.
+//
+// If requests are produced from the same goroutine that consumes
+// results, call Done from the producer once it is finished — otherwise
+// the consumer waits for requests that will never arrive.
+func (o *Op[ReqType, RespType]) Done() {
+	if o.closed.CompareAndSwap(false, true) {
+		close(o.noMore)
+	}
+}
+
+// finished reports whether the operation has nothing left to do: the
+// caller promised no more requests and every request in flight has been
+// accounted for.
+//
+// The two loads must happen in this order. Reading closed first
+// guarantees that every AddRequest that happened before Done has already
+// incremented r, so a subsequent r == 0 really does mean "all released".
+func (o *Op[ReqType, RespType]) finished() bool {
+	return o.closed.Load() && o.r.Load() == 0
+}
+
+// pending returns the channel that Done closes, or nil once it is
+// already closed — a nil channel blocks forever in a select, which is
+// exactly what a consumer that is only waiting for results wants.
+func (o *Op[ReqType, RespType]) pending() <-chan struct{} {
+	if o.closed.Load() {
+		return nil
+	}
+
+	return o.noMore
+}
+
+// Wait blocks until [Op.Done] has been called and every submitted
+// request has been processed, or until the operation context is
+// cancelled. Results are drained internally (not forwarded to the
+// caller). On successful completion it returns the accumulated
+// [Metrics]; on cancellation it returns the zero value.
+//
+// Wait blocks forever if Done is never called.
 //
 // Wait must not be called concurrently with [Op.Results] on the same Op.
 func (o *Op[ReqType, RespType]) Wait() (m Metrics) {
-	for o.r.Load() != 0 {
+	for !o.finished() {
 		select {
 		case <-o.out:
 			o.r.Add(-1)
 
 		case <-o.progress:
 			// a request was released without producing a result
+
+		case <-o.pending():
+			// Done was called; re-check
 
 		case <-o.ctx.Done():
 			return
@@ -108,8 +168,12 @@ func (o *Op[ReqType, RespType]) Wait() (m Metrics) {
 }
 
 // Results returns a channel that receives each successful result as it
-// becomes available. The channel is closed when all requests have been
-// consumed or the operation context is cancelled.
+// becomes available. The channel is closed once [Op.Done] has been
+// called and every submitted request has been consumed, or when the
+// operation context is cancelled.
+//
+// The channel never closes if Done is never called. Results may safely
+// be called before the first [Op.AddRequest].
 //
 // Results must not be called concurrently with [Op.Wait] on the same Op.
 func (o *Op[ReqType, RespType]) Results() <-chan RespType {
@@ -118,7 +182,7 @@ func (o *Op[ReqType, RespType]) Results() <-chan RespType {
 	go func() {
 		defer close(out)
 
-		for o.r.Load() != 0 {
+		for !o.finished() {
 			select {
 			case res := <-o.out:
 				select {
@@ -131,6 +195,9 @@ func (o *Op[ReqType, RespType]) Results() <-chan RespType {
 
 			case <-o.progress:
 				// a request was released without producing a result
+
+			case <-o.pending():
+				// Done was called; re-check
 
 			case <-o.ctx.Done():
 				return

@@ -21,6 +21,7 @@ func ExampleNew() {
 	for i := 1; i <= 5; i++ {
 		op.AddRequest(i)
 	}
+	op.Done() // no more requests
 
 	var results []int
 	for v := range op.Results() {
@@ -45,7 +46,9 @@ func ExampleNewOperation() {
 	defer end2()
 
 	op1.AddRequest(1)
+	op1.Done()
 	op2.AddRequest(2)
+	op2.Done()
 
 	m1 := op1.Wait()
 	m2 := op2.Wait()
@@ -66,6 +69,7 @@ func ExampleOp_AddRequest() {
 	defer end()
 
 	op.AddRequest("world")
+	op.Done()
 
 	for v := range op.Results() {
 		fmt.Println(v)
@@ -86,6 +90,7 @@ func ExampleOp_Wait() {
 	for i := 0; i < 10; i++ {
 		op.AddRequest(i)
 	}
+	op.Done()
 
 	m := op.Wait()
 	fmt.Println("total:", m.OperationsTotal)
@@ -104,6 +109,7 @@ func ExampleOp_Results() {
 
 	op.AddRequest(3)
 	op.AddRequest(7)
+	op.Done()
 
 	var results []int
 	for v := range op.Results() {
@@ -131,6 +137,7 @@ func ExampleOp_Err() {
 	defer end()
 
 	op.AddRequest(42)
+	op.Done()
 	op.Wait()
 
 	fmt.Println(op.Err())
@@ -162,6 +169,7 @@ func ExampleWithContinueOnError() {
 	for i := 1; i <= 6; i++ {
 		op.AddRequest(i)
 	}
+	op.Done()
 
 	m := op.Wait()
 
@@ -189,6 +197,7 @@ func ExampleOp_Err_ended() {
 	op, end := poly.NewOperation(context.Background(), wp)
 
 	op.AddRequest(1)
+	op.Done()
 	op.Wait()
 	end()
 
@@ -209,6 +218,7 @@ func ExampleOp_Metrics() {
 	for i := 0; i < 5; i++ {
 		op.AddRequest(i)
 	}
+	op.Done()
 	op.Wait()
 
 	m := op.Metrics(true) // read and reset

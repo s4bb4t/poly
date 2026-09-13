@@ -22,6 +22,7 @@ func TestWorkerPool(t *testing.T) {
 		for i := 0; i < requests; i++ {
 			op.AddRequest(i)
 		}
+		op.Done()
 
 		got := make(map[int]bool)
 		for res := range op.Results() {
@@ -51,6 +52,7 @@ func TestWorkerPool(t *testing.T) {
 		for i := 0; i < requests; i++ {
 			op.AddRequest(i)
 		}
+		op.Done()
 
 		m := op.Wait()
 
@@ -72,6 +74,7 @@ func TestWorkerPool(t *testing.T) {
 		for i := 0; i < requests; i++ {
 			op.AddRequest(i)
 		}
+		op.Done()
 
 		m := op.Wait()
 
@@ -92,6 +95,7 @@ func TestWorkerPool(t *testing.T) {
 		for i := 0; i < requests; i++ {
 			op.AddRequest(i)
 		}
+		op.Done()
 
 		op.Wait()
 
@@ -123,6 +127,7 @@ func TestWorkerPool(t *testing.T) {
 		for i := 0; i < 20; i++ {
 			op.AddRequest(i)
 		}
+		op.Done()
 
 		op.Wait()
 
@@ -149,6 +154,7 @@ func TestWorkerPool(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			op.AddRequest(i)
 		}
+		op.Done()
 
 		done := make(chan struct{})
 		go func() {
@@ -182,6 +188,7 @@ func TestWorkerPool(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			op.AddRequest(i)
 		}
+		op.Done()
 
 		ch := op.Results()
 
@@ -210,6 +217,7 @@ func TestWorkerPool(t *testing.T) {
 		defer cancel()
 
 		op.AddRequest(1)
+		op.Done()
 		op.Wait()
 
 		if err := op.Err(); err != nil {
@@ -225,6 +233,7 @@ func TestWorkerPool(t *testing.T) {
 		op, cancel := NewOperation(context.Background(), wp)
 
 		op.AddRequest(1)
+		op.Done()
 		op.Wait()
 
 		cancel()
@@ -249,6 +258,8 @@ func TestWorkerPool(t *testing.T) {
 			op1.AddRequest(i)
 			op2.AddRequest(i + 1000)
 		}
+		op1.Done()
+		op2.Done()
 
 		done := make(chan Metrics, 2)
 
@@ -276,6 +287,7 @@ func TestWorkerPool(t *testing.T) {
 		defer cancel()
 
 		op.AddRequest("world")
+		op.Done()
 
 		var result string
 		for res := range op.Results() {
@@ -304,6 +316,7 @@ func TestWorkerPool(t *testing.T) {
 		for i := 0; i < 5; i++ {
 			op.AddRequest(i)
 		}
+		op.Done()
 
 		done := make(chan struct{})
 		go func() {
@@ -334,6 +347,7 @@ func TestWorkerPool(t *testing.T) {
 		for i := 0; i < requests; i++ {
 			op.AddRequest(i)
 		}
+		op.Done()
 
 		done := make(chan struct{})
 		go func() {
@@ -371,6 +385,7 @@ func TestWorkerPool(t *testing.T) {
 		for i := 1; i <= 10; i++ {
 			op.AddRequest(i)
 		}
+		op.Done()
 
 		poolCancel()
 
@@ -405,6 +420,7 @@ func TestWorkerPool(t *testing.T) {
 		for i := 0; i < workers*2; i++ {
 			op.AddRequest(i)
 		}
+		op.Done()
 
 		for i := 0; i < workers; i++ {
 			<-computed
@@ -517,6 +533,7 @@ func TestWorkerPool(t *testing.T) {
 		defer cancel()
 
 		op.AddRequest("bad")
+		op.Done()
 		op.Wait()
 
 		var f *Failure[string]
@@ -546,6 +563,7 @@ func TestWorkerPool(t *testing.T) {
 		for i := 0; i < requests; i++ {
 			op.AddRequest(i)
 		}
+		op.Done()
 
 		got := make(map[int]bool)
 
@@ -608,6 +626,7 @@ func TestWorkerPool(t *testing.T) {
 		for i := 0; i < requests; i++ {
 			op.AddRequest(i)
 		}
+		op.Done()
 
 		done := make(chan Metrics, 1)
 		go func() { done <- op.Wait() }()
@@ -639,6 +658,7 @@ func TestWorkerPool(t *testing.T) {
 
 		op.AddRequest(1)
 		op.AddRequest(2)
+		op.Done()
 		op.Wait()
 
 		if m := op.Metrics(true); m.Failed != 2 {
@@ -652,29 +672,116 @@ func TestWorkerPool(t *testing.T) {
 		}
 	})
 
-	t.Run("AddRequest reports refusal after the operation ends", func(t *testing.T) {
+	t.Run("AddRequest is refused after Done", func(t *testing.T) {
 		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
 			return req, nil
 		}, 4)
 
 		op, cancel := NewOperation(context.Background(), wp)
+		defer cancel()
 
 		if !op.AddRequest(1) {
 			t.Error("first request should have been accepted")
 		}
 
-		op.Wait()
+		op.Done()
+
+		if op.AddRequest(2) {
+			t.Error("AddRequest accepted a request after Done")
+		}
+
+		if m := op.Wait(); m.OperationsTotal != 1 {
+			t.Errorf("got %d results, want 1", m.OperationsTotal)
+		}
+	})
+
+	t.Run("AddRequest is refused after the operation ends", func(t *testing.T) {
+		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
+			return req, nil
+		}, 4)
+
+		op, cancel := NewOperation(context.Background(), wp)
 		cancel()
 
 		// The sender goroutine closes the queue once it observes the
 		// cancellation; until then pushes still succeed.
 		deadline := time.After(3 * time.Second)
-		for op.AddRequest(2) {
+		for op.AddRequest(1) {
 			select {
 			case <-deadline:
 				t.Fatal("AddRequest kept accepting requests after the operation ended")
 			default:
 			}
+		}
+	})
+
+	t.Run("Results before the first AddRequest stays open", func(t *testing.T) {
+		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
+			return req * 2, nil
+		}, 4)
+
+		op, cancel := NewOperation(context.Background(), wp)
+		defer cancel()
+
+		// The old contract closed this channel immediately, because the
+		// in-flight counter happened to be zero at that instant.
+		ch := op.Results()
+
+		select {
+		case _, ok := <-ch:
+			t.Fatalf("Results closed before any request was submitted (ok=%v)", ok)
+		case <-time.After(100 * time.Millisecond):
+		}
+
+		const requests = 20
+		for i := 0; i < requests; i++ {
+			op.AddRequest(i)
+		}
+		op.Done()
+
+		var got int
+		for range ch {
+			got++
+		}
+
+		if got != requests {
+			t.Errorf("got %d results, want %d", got, requests)
+		}
+	})
+
+	t.Run("Results survives a gap between batches", func(t *testing.T) {
+		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
+			return req, nil
+		}, 4)
+
+		op, cancel := NewOperation(context.Background(), wp)
+		defer cancel()
+
+		ch := op.Results()
+
+		// Drain the first batch completely, so the in-flight counter is
+		// back at zero, then submit a second one. The channel must not
+		// have closed in between.
+		const batch = 10
+		for i := 0; i < batch; i++ {
+			op.AddRequest(i)
+		}
+		for i := 0; i < batch; i++ {
+			<-ch
+		}
+
+		for i := 0; i < batch; i++ {
+			op.AddRequest(i)
+		}
+		op.Done()
+
+		var got int
+		for range ch {
+			got++
+		}
+
+		if got != batch {
+			t.Errorf("second batch: got %d results, want %d", got, batch)
 		}
 	})
 
@@ -687,6 +794,7 @@ func TestWorkerPool(t *testing.T) {
 		defer cancel()
 
 		op.AddRequest(1)
+		op.Done()
 
 		done := make(chan struct{})
 		go func() {
@@ -726,6 +834,7 @@ func TestWorkerPool(t *testing.T) {
 		defer cancel()
 
 		op.AddRequest(1)
+		op.Done()
 		op.Wait()
 
 		if err := op.Err(); !errors.Is(err, errTest) || !errors.Is(err, ErrPanic) {
@@ -748,6 +857,7 @@ func TestWorkerPool(t *testing.T) {
 		for i := 0; i < workers*4; i++ {
 			op, cancel := NewOperation(context.Background(), wp)
 			op.AddRequest(-1)
+			op.Done()
 			op.Wait()
 			cancel()
 		}
@@ -759,6 +869,7 @@ func TestWorkerPool(t *testing.T) {
 		for i := 0; i < requests; i++ {
 			op.AddRequest(i)
 		}
+		op.Done()
 
 		done := make(chan Metrics, 1)
 		go func() { done <- op.Wait() }()
@@ -789,6 +900,7 @@ func TestWorkerPool(t *testing.T) {
 		for i := 1; i <= 5; i += 2 {
 			op.AddRequest(i)
 		}
+		op.Done()
 
 		op.Wait()
 

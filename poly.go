@@ -69,12 +69,17 @@ func NewOperation[ReqType, RespType any](ctx context.Context, wp *WorkerPool[Req
 
 		out:             make(chan RespType),
 		progress:        make(chan struct{}, 1),
+		noMore:          make(chan struct{}),
 		continueOnError: cfg.continueOnError,
 	}
 
 	q := newSendQueue[ReqType](cfg.maxQueue, !cfg.rejectOnFull)
 
 	op.submit = func(req ReqType) bool {
+		if op.closed.Load() {
+			return false
+		}
+
 		op.r.Add(1)
 
 		if !q.push(req) {
