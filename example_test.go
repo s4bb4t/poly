@@ -15,7 +15,7 @@ func ExampleNew() {
 		return n * n, nil
 	}, 4)
 
-	op, end := poly.NewOperation(wp, context.Background())
+	op, end := poly.NewOperation(context.Background(), wp)
 	defer end()
 
 	for i := 1; i <= 5; i++ {
@@ -39,9 +39,9 @@ func ExampleNewOperation() {
 		return n * 10, nil
 	}, 4)
 
-	op1, end1 := poly.NewOperation(wp, context.Background())
+	op1, end1 := poly.NewOperation(context.Background(), wp)
 	defer end1()
-	op2, end2 := poly.NewOperation(wp, context.Background())
+	op2, end2 := poly.NewOperation(context.Background(), wp)
 	defer end2()
 
 	op1.AddRequest(1)
@@ -62,7 +62,7 @@ func ExampleOp_AddRequest() {
 		return "hello " + s, nil
 	}, 4)
 
-	op, end := poly.NewOperation(wp, context.Background())
+	op, end := poly.NewOperation(context.Background(), wp)
 	defer end()
 
 	op.AddRequest("world")
@@ -80,7 +80,7 @@ func ExampleOp_Wait() {
 		return n, nil
 	}, 4)
 
-	op, end := poly.NewOperation(wp, context.Background())
+	op, end := poly.NewOperation(context.Background(), wp)
 	defer end()
 
 	for i := 0; i < 10; i++ {
@@ -99,7 +99,7 @@ func ExampleOp_Results() {
 		return n * 2, nil
 	}, 4)
 
-	op, end := poly.NewOperation(wp, context.Background())
+	op, end := poly.NewOperation(context.Background(), wp)
 	defer end()
 
 	op.AddRequest(3)
@@ -126,7 +126,7 @@ func ExampleOp_Err() {
 		return n, nil
 	}, 1)
 
-	op, end := poly.NewOperation(wp, context.Background())
+	op, end := poly.NewOperation(context.Background(), wp)
 	defer end()
 
 	op.AddRequest(1)
@@ -142,7 +142,7 @@ func ExampleOp_Err_ended() {
 		return n, nil
 	}, 4)
 
-	op, end := poly.NewOperation(wp, context.Background())
+	op, end := poly.NewOperation(context.Background(), wp)
 
 	op.AddRequest(1)
 	op.Wait()
@@ -159,7 +159,7 @@ func ExampleOp_Metrics() {
 		return n, nil
 	}, 4)
 
-	op, end := poly.NewOperation(wp, context.Background())
+	op, end := poly.NewOperation(context.Background(), wp)
 	defer end()
 
 	for i := 0; i < 5; i++ {

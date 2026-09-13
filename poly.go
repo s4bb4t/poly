@@ -57,9 +57,9 @@ func New[ReqType, RespType any](ctx context.Context, fn func(context.Context, Re
 // [Op.AddRequest] and feeds them into the pool's worker channel.
 // This avoids creating a goroutine per request.
 //
-//	op, end := poly.NewOperation(wp, ctx)
+//	op, end := poly.NewOperation(ctx, wp)
 //	defer end()
-func NewOperation[ReqType, RespType any](wp *WorkerPool[ReqType, RespType], ctx context.Context) (*Op[ReqType, RespType], func()) {
+func NewOperation[ReqType, RespType any](ctx context.Context, wp *WorkerPool[ReqType, RespType]) (*Op[ReqType, RespType], func()) {
 	opCtx, cancel := context.WithCancelCause(ctx)
 
 	op := &Op[ReqType, RespType]{

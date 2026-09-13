@@ -15,7 +15,7 @@ func TestWorkerPool(t *testing.T) {
 			return req * 2, nil
 		}, 40)
 
-		op, cancel := NewOperation(wp, context.Background())
+		op, cancel := NewOperation(context.Background(), wp)
 		defer cancel()
 
 		const requests = 100
@@ -44,7 +44,7 @@ func TestWorkerPool(t *testing.T) {
 			return req, nil
 		}, 40)
 
-		op, cancel := NewOperation(wp, context.Background())
+		op, cancel := NewOperation(context.Background(), wp)
 		defer cancel()
 
 		const requests = 100
@@ -65,7 +65,7 @@ func TestWorkerPool(t *testing.T) {
 			return req, nil
 		}, 40)
 
-		op, cancel := NewOperation(wp, context.Background())
+		op, cancel := NewOperation(context.Background(), wp)
 		defer cancel()
 
 		const requests = 10
@@ -85,7 +85,7 @@ func TestWorkerPool(t *testing.T) {
 			return req, nil
 		}, 40)
 
-		op, cancel := NewOperation(wp, context.Background())
+		op, cancel := NewOperation(context.Background(), wp)
 		defer cancel()
 
 		const requests = 50
@@ -117,7 +117,7 @@ func TestWorkerPool(t *testing.T) {
 			return req, nil
 		}, 40)
 
-		op, cancel := NewOperation(wp, context.Background())
+		op, cancel := NewOperation(context.Background(), wp)
 		defer cancel()
 
 		for i := 0; i < 20; i++ {
@@ -143,7 +143,7 @@ func TestWorkerPool(t *testing.T) {
 		}, 40)
 
 		opCtx, opCancel := context.WithCancel(context.Background())
-		op, cancel := NewOperation(wp, opCtx)
+		op, cancel := NewOperation(opCtx, wp)
 		defer cancel()
 
 		for i := 0; i < 10; i++ {
@@ -176,7 +176,7 @@ func TestWorkerPool(t *testing.T) {
 		}, 40)
 
 		opCtx, opCancel := context.WithCancel(context.Background())
-		op, cancel := NewOperation(wp, opCtx)
+		op, cancel := NewOperation(opCtx, wp)
 		defer cancel()
 
 		for i := 0; i < 10; i++ {
@@ -206,7 +206,7 @@ func TestWorkerPool(t *testing.T) {
 			return req, nil
 		}, 40)
 
-		op, cancel := NewOperation(wp, context.Background())
+		op, cancel := NewOperation(context.Background(), wp)
 		defer cancel()
 
 		op.AddRequest(1)
@@ -222,7 +222,7 @@ func TestWorkerPool(t *testing.T) {
 			return req, nil
 		}, 40)
 
-		op, cancel := NewOperation(wp, context.Background())
+		op, cancel := NewOperation(context.Background(), wp)
 
 		op.AddRequest(1)
 		op.Wait()
@@ -240,9 +240,9 @@ func TestWorkerPool(t *testing.T) {
 			return req, nil
 		}, 40)
 
-		op1, cancel1 := NewOperation(wp, context.Background())
+		op1, cancel1 := NewOperation(context.Background(), wp)
 		defer cancel1()
-		op2, cancel2 := NewOperation(wp, context.Background())
+		op2, cancel2 := NewOperation(context.Background(), wp)
 		defer cancel2()
 
 		for i := 0; i < 50; i++ {
@@ -272,7 +272,7 @@ func TestWorkerPool(t *testing.T) {
 			return "hello " + req, nil
 		}, 40)
 
-		op, cancel := NewOperation(wp, context.Background())
+		op, cancel := NewOperation(context.Background(), wp)
 		defer cancel()
 
 		op.AddRequest("world")
@@ -298,7 +298,7 @@ func TestWorkerPool(t *testing.T) {
 			}
 		}, 40)
 
-		op, cancel := NewOperation(wp, poolCtx)
+		op, cancel := NewOperation(poolCtx, wp)
 		defer cancel()
 
 		for i := 0; i < 5; i++ {
@@ -327,7 +327,7 @@ func TestWorkerPool(t *testing.T) {
 			return 0, errTest
 		}, 4)
 
-		op, cancel := NewOperation(wp, context.Background())
+		op, cancel := NewOperation(context.Background(), wp)
 		defer cancel()
 
 		const requests = 20
@@ -360,7 +360,7 @@ func TestWorkerPool(t *testing.T) {
 			return 0, ctx.Err()
 		}, 1)
 
-		op, cancel := NewOperation(wp, context.Background())
+		op, cancel := NewOperation(context.Background(), wp)
 		defer cancel()
 
 		// Occupy the single worker with a task that never finishes.
@@ -400,7 +400,7 @@ func TestWorkerPool(t *testing.T) {
 			return req, nil
 		}, workers)
 
-		op, cancel := NewOperation(wp, context.Background())
+		op, cancel := NewOperation(context.Background(), wp)
 
 		for i := 0; i < workers*2; i++ {
 			op.AddRequest(i)
@@ -432,7 +432,7 @@ func TestWorkerPool(t *testing.T) {
 			panic("boom")
 		}, 4)
 
-		op, cancel := NewOperation(wp, context.Background())
+		op, cancel := NewOperation(context.Background(), wp)
 		defer cancel()
 
 		op.AddRequest(1)
@@ -471,7 +471,7 @@ func TestWorkerPool(t *testing.T) {
 			panic(errTest)
 		}, 2)
 
-		op, cancel := NewOperation(wp, context.Background())
+		op, cancel := NewOperation(context.Background(), wp)
 		defer cancel()
 
 		op.AddRequest(1)
@@ -495,13 +495,13 @@ func TestWorkerPool(t *testing.T) {
 		// Panic once per worker: without recover() every goroutine dies
 		// here and the pool is left with nothing to run the next operation.
 		for i := 0; i < workers*4; i++ {
-			op, cancel := NewOperation(wp, context.Background())
+			op, cancel := NewOperation(context.Background(), wp)
 			op.AddRequest(-1)
 			op.Wait()
 			cancel()
 		}
 
-		op, cancel := NewOperation(wp, context.Background())
+		op, cancel := NewOperation(context.Background(), wp)
 		defer cancel()
 
 		const requests = 50
@@ -531,7 +531,7 @@ func TestWorkerPool(t *testing.T) {
 			return req, nil
 		}, 4)
 
-		op, cancel := NewOperation(wp, context.Background())
+		op, cancel := NewOperation(context.Background(), wp)
 		defer cancel()
 
 		// Only add odd numbers (which succeed)
