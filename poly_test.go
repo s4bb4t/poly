@@ -1,5 +1,3 @@
-//go:build !race
-
 package poly
 
 import (
@@ -231,8 +229,6 @@ func TestWorkerPool(t *testing.T) {
 
 		cancel()
 
-		time.Sleep(10 * time.Millisecond)
-
 		err := op.Err()
 		if !errors.Is(err, ErrOperationEnded) {
 			t.Errorf("expected ErrOperationEnded, got %v", err)
@@ -356,23 +352,22 @@ func TestWorkerPool(t *testing.T) {
 	t.Run("AddRequest decrements r on pool cancel", func(t *testing.T) {
 		poolCtx, poolCancel := context.WithCancel(context.Background())
 
+		busy := make(chan struct{})
+
 		wp := New(poolCtx, func(ctx context.Context, req int) (int, error) {
-			select {
-			case <-time.After(time.Hour):
-				return req, nil
-			case <-ctx.Done():
-				return 0, ctx.Err()
-			}
+			close(busy)
+			<-ctx.Done()
+			return 0, ctx.Err()
 		}, 1)
 
 		op, cancel := NewOperation(wp, context.Background())
 		defer cancel()
 
-		// Fill the single worker with a blocking task
+		// Occupy the single worker with a task that never finishes.
 		op.AddRequest(0)
-		time.Sleep(50 * time.Millisecond)
+		<-busy
 
-		// These requests will be stuck trying to send to the full channel
+		// These requests pile up behind the full pool channel.
 		for i := 1; i <= 10; i++ {
 			op.AddRequest(i)
 		}
@@ -393,23 +388,43 @@ func TestWorkerPool(t *testing.T) {
 	})
 
 	t.Run("endFunc does not panic", func(t *testing.T) {
+		const workers = 40
+
+		// computed is buffered so fn never blocks; draining it proves that
+		// `workers` goroutines have finished fn and are now blocked trying
+		// to send their result to a consumer that does not exist.
+		computed := make(chan struct{}, workers*2)
+
 		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
-			time.Sleep(10 * time.Millisecond)
+			computed <- struct{}{}
 			return req, nil
-		}, 40)
+		}, workers)
 
 		op, cancel := NewOperation(wp, context.Background())
 
-		for i := 0; i < 50; i++ {
+		for i := 0; i < workers*2; i++ {
 			op.AddRequest(i)
 		}
 
-		// Cancel while workers may still be trying to send to op.out
-		// Old code did close(op.out) which would panic
+		for i := 0; i < workers; i++ {
+			<-computed
+		}
+
+		// Cancel while workers are parked on `op.out <- res`.
+		// Old code did close(op.out) here, which panicked the workers.
 		cancel()
 
-		// If we get here without panic, the test passes
-		time.Sleep(50 * time.Millisecond)
+		done := make(chan struct{})
+		go func() {
+			op.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("workers did not unwind after the operation ended")
+		}
 	})
 
 	t.Run("calcTimeSum excludes errors", func(t *testing.T) {

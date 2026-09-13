@@ -134,7 +134,8 @@ func NewOperation[ReqType, RespType any](wp *WorkerPool[ReqType, RespType], ctx 
 //   - error / cancellation paths: handle decrements r (no result is sent).
 //   - success path: r is decremented by the consumer ([Op.Wait] / [Op.Results])
 //     after reading from op.out.
-//   - send blocked by cancellation: handle rolls back tDone and decrements r.
+//   - send blocked by cancellation: handle rolls back the metrics and
+//     decrements r.
 func (wp *WorkerPool[ReqType, RespType]) handle(req ReqType, op *Op[ReqType, RespType]) {
 	if op.ctx.Err() != nil {
 		op.r.Add(-1)
@@ -151,24 +152,27 @@ func (wp *WorkerPool[ReqType, RespType]) handle(req ReqType, op *Op[ReqType, Res
 
 	res, err := wp.fn(ctx, req)
 
+	dur := time.Since(st)
+
 	if err != nil {
-		op.r.Add(-1)
+		// Cancel *before* releasing the counter: a consumer blocked in
+		// Wait/Results wakes up as soon as r reaches zero, and it must
+		// never observe a finished operation whose cause is not set yet.
 		op.cancel(err)
+		op.r.Add(-1)
 		return
 	}
 
-	op.calcTimeSum.Add(int64(time.Since(st)))
+	op.calcTimeSum.Add(int64(dur))
 	op.tDone.Add(1)
 
 	select {
 	case op.out <- res:
 
 	case <-op.ctx.Done():
-		op.tDone.Add(-1)
-		op.r.Add(-1)
+		op.rollback(dur)
 
 	case <-wp.ctx.Done():
-		op.tDone.Add(-1)
-		op.r.Add(-1)
+		op.rollback(dur)
 	}
 }

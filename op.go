@@ -123,6 +123,15 @@ func (o *Op[ReqType, RespType]) Err() error {
 	return o.ctx.Err()
 }
 
+// rollback undoes the metrics recorded for a result that was never
+// delivered because the operation or the pool was cancelled mid-send,
+// and releases the request from the in-flight counter.
+func (o *Op[ReqType, RespType]) rollback(d time.Duration) {
+	o.calcTimeSum.Add(-int64(d))
+	o.tDone.Add(-1)
+	o.r.Add(-1)
+}
+
 // Metrics returns a snapshot of processing statistics. If resetOnRead is
 // true, the counters are atomically reset to zero after reading.
 func (o *Op[ReqType, RespType]) Metrics(resetOnRead bool) Metrics {
