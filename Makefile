@@ -1,55 +1,34 @@
-BINARY_NAME := poly
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-BUILD_TIME ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+.PHONY: help test race cover bench lint vet fmt tidy check clean
 
-.PHONY: build run test lint clean docker proto fmt vet mod-download check
+help:
+	@grep -E '^[a-z-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
-build:
-	go build -ldflags="-s -w -X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME)" \
-		-o bin/$(BINARY_NAME) ./cmd/$(BINARY_NAME)
-
-run: build
-	STAGE=local	./bin/$(BINARY_NAME)
-
-test:
-	go test -cover -coverprofile coverage.out ./...
+test: ## run tests with the race detector and coverage
+	go test -race -cover -coverprofile coverage.out ./...
 	go tool cover -func coverage.out
 
-check : lint fmt vet
+race: ## run tests repeatedly under the race detector
+	go test -race -count=20 -cpu=1,2,8 ./...
+
+cover: test ## open the HTML coverage report
+	go tool cover -html coverage.out -o coverage.html
+
+bench:
+	go test -run '^$$' -bench . -benchmem ./...
 
 lint:
 	golangci-lint run --timeout 5m
 
-fmt:
-	go fmt ./...
-
 vet:
 	go vet ./...
 
-mod-download:
-	go mod download
+fmt:
+	go fmt ./...
+
+tidy:
 	go mod tidy
 
+check: fmt vet lint test ## everything CI runs
+
 clean:
-	rm -rf bin/ coverage.out
-
-
-install-protoc:
-	@which protoc > /dev/null || (echo "protoc not found, install: https://github.com/protocolbuffers/protobuf/releases" && exit 1)
-	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-
-proto: install-protoc
-	@rm -rf pkg/grpc/$(BINARY_NAME)
-	@SHARED_INCLUDES=$$(find api/proto/shared -maxdepth 1 -type d -name 'v*' | sort | while read dir; do echo "-I $$dir -I $$dir/deps"; done | tr '\n' ' '); \
-	for version in $$(find api/proto -maxdepth 1 -type d -name 'v*' | sort); do \
-		ver=$$(basename $$version); \
-		echo "Generating proto for $$ver..."; \
-		mkdir -p pkg/grpc/$(BINARY_NAME)/$$ver; \
-		protoc -I api/proto $$SHARED_INCLUDES \
-			--go_out=pkg/grpc/$(BINARY_NAME) --go_opt=paths=source_relative \
-			--go-grpc_out=pkg/grpc/$(BINARY_NAME) --go-grpc_opt=paths=source_relative \
-			api/proto/$$ver/*.proto; \
-	done
-	@rm -rf pkg/grpc/$(BINARY_NAME)/shared
-	@go mod tidy
+	rm -f coverage.out coverage.html
