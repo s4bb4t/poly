@@ -42,3 +42,30 @@ func (e *PanicError) Unwrap() []error {
 	}
 	return []error{ErrPanic}
 }
+
+// Failure records a single request that could not be processed, together
+// with the reason. It is what [Op.Failures] returns, and — in the default
+// fail-fast mode — what [Op.Err] reports, so the caller can always tell
+// which input broke, not just that something did:
+//
+//	var f *poly.Failure[Address]
+//	if errors.As(op.Err(), &f) {
+//		log.Printf("address %s: %v", f.Request, f.Err)
+//	}
+type Failure[ReqType any] struct {
+	// Request is the request that failed, exactly as submitted.
+	Request ReqType
+
+	// Err is the error returned by the user-supplied function, or a
+	// [*PanicError] if it panicked.
+	Err error
+}
+
+// Error implements the error interface.
+func (f *Failure[ReqType]) Error() string {
+	return fmt.Sprintf("poly: request %v: %v", f.Request, f.Err)
+}
+
+// Unwrap returns the underlying error so that errors.Is and errors.As
+// see straight through the wrapper.
+func (f *Failure[ReqType]) Unwrap() error { return f.Err }

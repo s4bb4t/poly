@@ -115,12 +115,13 @@ func ExampleOp_Results() {
 	// Output: [6 14]
 }
 
-// Err returns the error that cancelled the operation, or nil.
+// Err returns the error that cancelled the operation, or nil. The error
+// names the request that failed and unwraps to the original error.
 func ExampleOp_Err() {
 	myErr := errors.New("something went wrong")
 
 	wp := poly.New(context.Background(), func(_ context.Context, n int) (int, error) {
-		if n == 1 {
+		if n == 42 {
 			return 0, myErr
 		}
 		return n, nil
@@ -129,11 +130,54 @@ func ExampleOp_Err() {
 	op, end := poly.NewOperation(context.Background(), wp)
 	defer end()
 
-	op.AddRequest(1)
+	op.AddRequest(42)
 	op.Wait()
 
 	fmt.Println(op.Err())
-	// Output: something went wrong
+	fmt.Println("is myErr:", errors.Is(op.Err(), myErr))
+
+	var f *poly.Failure[int]
+	if errors.As(op.Err(), &f) {
+		fmt.Println("bad request:", f.Request)
+	}
+	// Output:
+	// poly: request 42: something went wrong
+	// is myErr: true
+	// bad request: 42
+}
+
+// WithContinueOnError keeps the operation running when individual
+// requests fail, and collects the failures for inspection afterwards.
+func ExampleWithContinueOnError() {
+	wp := poly.New(context.Background(), func(_ context.Context, n int) (int, error) {
+		if n%2 == 0 {
+			return 0, fmt.Errorf("%d is even", n)
+		}
+		return n, nil
+	}, 4)
+
+	op, end := poly.NewOperation(context.Background(), wp, poly.WithContinueOnError())
+	defer end()
+
+	for i := 1; i <= 6; i++ {
+		op.AddRequest(i)
+	}
+
+	m := op.Wait()
+
+	fmt.Println("ok:", m.OperationsTotal, "failed:", m.Failed)
+	fmt.Println("err:", op.Err())
+
+	bad := make([]int, 0, len(op.Failures()))
+	for _, f := range op.Failures() {
+		bad = append(bad, f.Request)
+	}
+	sort.Ints(bad)
+	fmt.Println("bad requests:", bad)
+	// Output:
+	// ok: 3 failed: 3
+	// err: <nil>
+	// bad requests: [2 4 6]
 }
 
 // Err returns ErrOperationEnded after the end function is called.

@@ -427,6 +427,179 @@ func TestWorkerPool(t *testing.T) {
 		}
 	})
 
+	t.Run("failure names the request", func(t *testing.T) {
+		wp := New(context.Background(), func(_ context.Context, req string) (string, error) {
+			if req == "bad" {
+				return "", errTest
+			}
+			return req, nil
+		}, 4)
+
+		op, cancel := NewOperation(context.Background(), wp)
+		defer cancel()
+
+		op.AddRequest("bad")
+		op.Wait()
+
+		var f *Failure[string]
+		if !errors.As(op.Err(), &f) {
+			t.Fatalf("expected *Failure[string], got %T (%v)", op.Err(), op.Err())
+		}
+		if f.Request != "bad" {
+			t.Errorf("failed request: got %q, want %q", f.Request, "bad")
+		}
+		if !errors.Is(op.Err(), errTest) {
+			t.Errorf("expected the cause to unwrap to errTest, got %v", op.Err())
+		}
+	})
+
+	t.Run("continue on error processes every request", func(t *testing.T) {
+		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
+			if req%3 == 0 {
+				return 0, errTest
+			}
+			return req, nil
+		}, 8)
+
+		op, cancel := NewOperation(context.Background(), wp, WithContinueOnError())
+		defer cancel()
+
+		const requests = 60
+		for i := 0; i < requests; i++ {
+			op.AddRequest(i)
+		}
+
+		got := make(map[int]bool)
+
+		drained := make(chan struct{})
+		go func() {
+			defer close(drained)
+			for res := range op.Results() {
+				got[res] = true
+			}
+		}()
+
+		select {
+		case <-drained:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Results never closed with WithContinueOnError")
+		}
+
+		const wantFailed = requests / 3
+		const wantOK = requests - wantFailed
+
+		if len(got) != wantOK {
+			t.Errorf("got %d results, want %d", len(got), wantOK)
+		}
+		if err := op.Err(); err != nil {
+			t.Errorf("expected the operation to survive per-request errors, got %v", err)
+		}
+
+		m := op.Metrics(false)
+		if m.OperationsTotal != wantOK || m.Failed != wantFailed {
+			t.Errorf("metrics: got ok=%d failed=%d, want ok=%d failed=%d",
+				m.OperationsTotal, m.Failed, wantOK, wantFailed)
+		}
+
+		failures := op.Failures()
+		if len(failures) != wantFailed {
+			t.Fatalf("got %d failures, want %d", len(failures), wantFailed)
+		}
+		for _, f := range failures {
+			if f.Request%3 != 0 {
+				t.Errorf("unexpected failed request %d", f.Request)
+			}
+			if !errors.Is(f, errTest) {
+				t.Errorf("failure %d: got %v, want errTest", f.Request, f.Err)
+			}
+		}
+	})
+
+	t.Run("continue on error survives panics", func(t *testing.T) {
+		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
+			if req%2 == 0 {
+				panic(req)
+			}
+			return req, nil
+		}, 4)
+
+		op, cancel := NewOperation(context.Background(), wp, WithContinueOnError())
+		defer cancel()
+
+		const requests = 20
+		for i := 0; i < requests; i++ {
+			op.AddRequest(i)
+		}
+
+		done := make(chan Metrics, 1)
+		go func() { done <- op.Wait() }()
+
+		select {
+		case m := <-done:
+			if m.OperationsTotal != requests/2 || m.Failed != requests/2 {
+				t.Errorf("metrics: got ok=%d failed=%d, want %d/%d",
+					m.OperationsTotal, m.Failed, requests/2, requests/2)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("Wait deadlocked with panicking requests")
+		}
+
+		for _, f := range op.Failures() {
+			if !errors.Is(f, ErrPanic) {
+				t.Errorf("failure %d: got %v, want ErrPanic", f.Request, f.Err)
+			}
+		}
+	})
+
+	t.Run("Metrics reset keeps the failure list", func(t *testing.T) {
+		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
+			return 0, errTest
+		}, 2)
+
+		op, cancel := NewOperation(context.Background(), wp, WithContinueOnError())
+		defer cancel()
+
+		op.AddRequest(1)
+		op.AddRequest(2)
+		op.Wait()
+
+		if m := op.Metrics(true); m.Failed != 2 {
+			t.Errorf("before reset: got failed=%d, want 2", m.Failed)
+		}
+		if m := op.Metrics(false); m.Failed != 0 {
+			t.Errorf("after reset: got failed=%d, want 0", m.Failed)
+		}
+		if n := len(op.Failures()); n != 2 {
+			t.Errorf("after reset: got %d failures, want 2", n)
+		}
+	})
+
+	t.Run("AddRequest reports refusal after the operation ends", func(t *testing.T) {
+		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
+			return req, nil
+		}, 4)
+
+		op, cancel := NewOperation(context.Background(), wp)
+
+		if !op.AddRequest(1) {
+			t.Error("first request should have been accepted")
+		}
+
+		op.Wait()
+		cancel()
+
+		// The sender goroutine closes the queue once it observes the
+		// cancellation; until then pushes still succeed.
+		deadline := time.After(3 * time.Second)
+		for op.AddRequest(2) {
+			select {
+			case <-deadline:
+				t.Fatal("AddRequest kept accepting requests after the operation ended")
+			default:
+			}
+		}
+	})
+
 	t.Run("panic in fn is reported as an error", func(t *testing.T) {
 		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
 			panic("boom")

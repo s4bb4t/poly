@@ -3,7 +3,6 @@ package poly
 import (
 	"context"
 	"runtime/debug"
-	"sync/atomic"
 	"time"
 )
 
@@ -59,26 +58,31 @@ func New[ReqType, RespType any](ctx context.Context, fn func(context.Context, Re
 //
 //	op, end := poly.NewOperation(ctx, wp)
 //	defer end()
-func NewOperation[ReqType, RespType any](ctx context.Context, wp *WorkerPool[ReqType, RespType]) (*Op[ReqType, RespType], func()) {
+func NewOperation[ReqType, RespType any](ctx context.Context, wp *WorkerPool[ReqType, RespType], opts ...Option) (*Op[ReqType, RespType], func()) {
 	opCtx, cancel := context.WithCancelCause(ctx)
+
+	cfg := newConfig(opts)
 
 	op := &Op[ReqType, RespType]{
 		ctx:    opCtx,
 		cancel: cancel,
 
-		out:         make(chan RespType),
-		r:           new(atomic.Int64),
-		tDone:       new(atomic.Int64),
-		calcTimeSum: new(atomic.Int64),
+		out:             make(chan RespType),
+		progress:        make(chan struct{}, 1),
+		continueOnError: cfg.continueOnError,
 	}
 
 	q := newSendQueue[ReqType]()
 
-	op.submit = func(req ReqType) {
+	op.submit = func(req ReqType) bool {
 		op.r.Add(1)
+
 		if !q.push(req) {
-			op.r.Add(-1)
+			op.release(1)
+			return false
 		}
+
+		return true
 	}
 
 	// Sender goroutine: drains the queue in batches and sends closures
@@ -86,9 +90,7 @@ func NewOperation[ReqType, RespType any](ctx context.Context, wp *WorkerPool[Req
 	// cancelled, decrementing r for every unsent request.
 	go func() {
 		drain := func() {
-			if n := q.close(); n > 0 {
-				op.r.Add(-int64(n))
-			}
+			op.release(q.close())
 		}
 
 		for {
@@ -107,11 +109,11 @@ func NewOperation[ReqType, RespType any](ctx context.Context, wp *WorkerPool[Req
 				select {
 				case wp.in <- func() { wp.handle(req, op) }:
 				case <-wp.ctx.Done():
-					op.r.Add(-int64(len(batch) - i))
+					op.release(len(batch) - i)
 					drain()
 					return
 				case <-opCtx.Done():
-					op.r.Add(-int64(len(batch) - i))
+					op.release(len(batch) - i)
 					drain()
 					return
 				}
@@ -133,13 +135,15 @@ func NewOperation[ReqType, RespType any](ctx context.Context, wp *WorkerPool[Req
 //
 // Pending-request counter (r) ownership:
 //   - error / cancellation paths: handle decrements r (no result is sent).
+//     A failing request is recorded on the Op by [Op.fail], which cancels
+//     the operation unless [WithContinueOnError] was set.
 //   - success path: r is decremented by the consumer ([Op.Wait] / [Op.Results])
 //     after reading from op.out.
 //   - send blocked by cancellation: handle rolls back the metrics and
 //     decrements r.
 func (wp *WorkerPool[ReqType, RespType]) handle(req ReqType, op *Op[ReqType, RespType]) {
 	if op.ctx.Err() != nil {
-		op.r.Add(-1)
+		op.release(1)
 		return
 	}
 
@@ -152,11 +156,7 @@ func (wp *WorkerPool[ReqType, RespType]) handle(req ReqType, op *Op[ReqType, Res
 	res, err, dur := wp.call(ctx, req)
 
 	if err != nil {
-		// Cancel *before* releasing the counter: a consumer blocked in
-		// Wait/Results wakes up as soon as r reaches zero, and it must
-		// never observe a finished operation whose cause is not set yet.
-		op.cancel(err)
-		op.r.Add(-1)
+		op.fail(req, err)
 		return
 	}
 
