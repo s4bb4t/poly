@@ -205,6 +205,34 @@ func ExampleOp_Err_ended() {
 	// Output: true
 }
 
+// Done tells the operation that no further requests are coming. It is
+// what lets Results close: submit from a producer goroutine, consume in
+// the caller, and call Done once the producer is finished.
+func ExampleOp_Done() {
+	wp := poly.New(context.Background(), func(_ context.Context, n int) (int, error) {
+		return n + 100, nil
+	}, 4)
+
+	op, end := poly.NewOperation(context.Background(), wp)
+	defer end()
+
+	go func() {
+		for i := 1; i <= 3; i++ {
+			op.AddRequest(i)
+		}
+		op.Done()
+	}()
+
+	var results []int
+	for v := range op.Results() {
+		results = append(results, v)
+	}
+
+	sort.Ints(results)
+	fmt.Println(results)
+	// Output: [101 102 103]
+}
+
 // Metrics returns processing statistics. Pass true to reset counters
 // atomically after reading.
 func ExampleOp_Metrics() {
