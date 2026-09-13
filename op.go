@@ -2,11 +2,10 @@ package poly
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/go-faster/errors"
 )
 
 // ErrOperationEnded is the cause set on an operation's context when
