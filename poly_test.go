@@ -427,6 +427,84 @@ func TestWorkerPool(t *testing.T) {
 		}
 	})
 
+	t.Run("WithRejectOnFull refuses instead of queueing", func(t *testing.T) {
+		release := make(chan struct{})
+
+		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
+			<-release
+			return req, nil
+		}, 1)
+
+		op, cancel := NewOperation(context.Background(), wp,
+			WithMaxQueue(4), WithRejectOnFull())
+		defer func() {
+			close(release)
+			cancel()
+		}()
+
+		// The workers are stuck, so every request eventually piles up in
+		// the queue and AddRequest must start refusing.
+		var accepted int
+		deadline := time.After(3 * time.Second)
+		for {
+			if !op.AddRequest(accepted) {
+				break
+			}
+			accepted++
+
+			select {
+			case <-deadline:
+				t.Fatal("AddRequest never refused: the queue is not bounded")
+			default:
+			}
+		}
+
+		// queue limit + the batch in flight + the pool channel: a small
+		// constant, nowhere near unbounded.
+		if accepted > 32 {
+			t.Errorf("accepted %d requests before refusing, want a bounded number", accepted)
+		}
+	})
+
+	t.Run("WithMaxQueue applies backpressure", func(t *testing.T) {
+		release := make(chan struct{})
+
+		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
+			<-release
+			return req, nil
+		}, 1)
+
+		op, cancel := NewOperation(context.Background(), wp, WithMaxQueue(4))
+
+		blocked := make(chan struct{})
+		go func() {
+			defer close(blocked)
+			for i := 0; ; i++ {
+				if !op.AddRequest(i) {
+					return
+				}
+			}
+		}()
+
+		// The producer must get stuck rather than allocate without limit.
+		select {
+		case <-blocked:
+			t.Fatal("the producer was never blocked: the queue is not bounded")
+		case <-time.After(200 * time.Millisecond):
+		}
+
+		// Cancelling the operation has to release the blocked producer.
+		cancel()
+
+		select {
+		case <-blocked:
+		case <-time.After(3 * time.Second):
+			t.Fatal("AddRequest stayed blocked after the operation ended")
+		}
+
+		close(release)
+	})
+
 	t.Run("failure names the request", func(t *testing.T) {
 		wp := New(context.Background(), func(_ context.Context, req string) (string, error) {
 			if req == "bad" {

@@ -73,8 +73,13 @@ type (
 // It is safe to call from multiple goroutines.
 //
 // It reports whether the request was accepted. A request is refused once
-// the operation or the pool context is cancelled; see [Op.Err] for the
-// reason.
+// the operation or the pool context is cancelled (see [Op.Err] for the
+// reason), or when the queue is full and the operation was created with
+// [WithRejectOnFull].
+//
+// By default the queue is unbounded and AddRequest never blocks; with
+// [WithMaxQueue] it applies backpressure and blocks while the queue is
+// full.
 func (o *Op[ReqType, RespType]) AddRequest(req ReqType) bool {
 	return o.submit(req)
 }

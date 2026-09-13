@@ -72,7 +72,7 @@ func NewOperation[ReqType, RespType any](ctx context.Context, wp *WorkerPool[Req
 		continueOnError: cfg.continueOnError,
 	}
 
-	q := newSendQueue[ReqType]()
+	q := newSendQueue[ReqType](cfg.maxQueue, !cfg.rejectOnFull)
 
 	op.submit = func(req ReqType) bool {
 		op.r.Add(1)

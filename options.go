@@ -36,3 +36,33 @@ func newConfig(opts []Option) config {
 func WithContinueOnError() Option {
 	return func(c *config) { c.continueOnError = true }
 }
+
+// WithMaxQueue bounds the operation's queue to n requests waiting to be
+// handed to the pool.
+//
+// By default the queue is unbounded and [Op.AddRequest] never blocks: a
+// producer that outruns the workers grows the queue until the process
+// runs out of memory. Set a limit whenever the producer is not naturally
+// paced — reading a file, scanning a table, consuming a stream.
+//
+// Once the queue is full, AddRequest blocks until the sender drains it,
+// or until the operation or pool context is cancelled — see
+// [WithRejectOnFull] for the non-blocking alternative. n <= 0 restores
+// the unbounded default.
+//
+// The limit counts queued requests only. Requests already picked up by
+// the operation's sender goroutine or sitting in the pool channel are
+// not counted, so the real ceiling is a small constant factor above n.
+func WithMaxQueue(n int) Option {
+	return func(c *config) { c.maxQueue = n }
+}
+
+// WithRejectOnFull makes [Op.AddRequest] return false immediately
+// instead of blocking when the queue set by [WithMaxQueue] is full.
+// It has no effect on an unbounded queue.
+//
+// Use it when shedding load is better than slowing the producer down;
+// the caller decides what to do with the refused request.
+func WithRejectOnFull() Option {
+	return func(c *config) { c.rejectOnFull = true }
+}
