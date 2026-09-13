@@ -2,15 +2,10 @@ package poly
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
 )
-
-// ErrOperationEnded is the cause set on an operation's context when
-// the end function returned by [NewOperation] is called.
-var ErrOperationEnded = errors.New("operation ended")
 
 type (
 	// Op is a handle to an independent batch of requests submitted to a

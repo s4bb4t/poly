@@ -2,6 +2,7 @@ package poly
 
 import (
 	"context"
+	"runtime/debug"
 	"sync/atomic"
 	"time"
 )
@@ -148,11 +149,7 @@ func (wp *WorkerPool[ReqType, RespType]) handle(req ReqType, op *Op[ReqType, Res
 	defer stop()
 	defer ctxCancel(nil)
 
-	st := time.Now()
-
-	res, err := wp.fn(ctx, req)
-
-	dur := time.Since(st)
+	res, err, dur := wp.call(ctx, req)
 
 	if err != nil {
 		// Cancel *before* releasing the counter: a consumer blocked in
@@ -175,4 +172,26 @@ func (wp *WorkerPool[ReqType, RespType]) handle(req ReqType, op *Op[ReqType, Res
 	case <-wp.ctx.Done():
 		op.rollback(dur)
 	}
+}
+
+// call invokes the user-supplied function and converts a panic into a
+// [PanicError]. Without this, a panic in fn would unwind the worker
+// goroutine and kill it: the pool would silently shrink from N workers
+// to N-1, then to zero, and every operation would hang with no error
+// reported anywhere.
+func (wp *WorkerPool[ReqType, RespType]) call(ctx context.Context, req ReqType) (res RespType, err error, dur time.Duration) {
+	st := time.Now()
+
+	defer func() {
+		dur = time.Since(st)
+
+		if p := recover(); p != nil {
+			var zero RespType
+			res, err = zero, &PanicError{Value: p, Stack: debug.Stack()}
+		}
+	}()
+
+	res, err = wp.fn(ctx, req)
+
+	return res, err, time.Since(st)
 }

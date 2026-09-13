@@ -427,6 +427,101 @@ func TestWorkerPool(t *testing.T) {
 		}
 	})
 
+	t.Run("panic in fn is reported as an error", func(t *testing.T) {
+		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
+			panic("boom")
+		}, 4)
+
+		op, cancel := NewOperation(wp, context.Background())
+		defer cancel()
+
+		op.AddRequest(1)
+
+		done := make(chan struct{})
+		go func() {
+			op.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("Wait deadlocked: panic did not release the request")
+		}
+
+		err := op.Err()
+		if !errors.Is(err, ErrPanic) {
+			t.Fatalf("expected ErrPanic, got %v", err)
+		}
+
+		var pe *PanicError
+		if !errors.As(err, &pe) {
+			t.Fatalf("expected *PanicError, got %T", err)
+		}
+		if pe.Value != "boom" {
+			t.Errorf("panic value: got %v, want boom", pe.Value)
+		}
+		if len(pe.Stack) == 0 {
+			t.Error("expected a captured stack trace")
+		}
+	})
+
+	t.Run("panic value that is an error unwraps to it", func(t *testing.T) {
+		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
+			panic(errTest)
+		}, 2)
+
+		op, cancel := NewOperation(wp, context.Background())
+		defer cancel()
+
+		op.AddRequest(1)
+		op.Wait()
+
+		if err := op.Err(); !errors.Is(err, errTest) || !errors.Is(err, ErrPanic) {
+			t.Errorf("expected both errTest and ErrPanic, got %v", err)
+		}
+	})
+
+	t.Run("panics do not degrade the pool", func(t *testing.T) {
+		const workers = 4
+
+		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
+			if req < 0 {
+				panic("boom")
+			}
+			return req, nil
+		}, workers)
+
+		// Panic once per worker: without recover() every goroutine dies
+		// here and the pool is left with nothing to run the next operation.
+		for i := 0; i < workers*4; i++ {
+			op, cancel := NewOperation(wp, context.Background())
+			op.AddRequest(-1)
+			op.Wait()
+			cancel()
+		}
+
+		op, cancel := NewOperation(wp, context.Background())
+		defer cancel()
+
+		const requests = 50
+		for i := 0; i < requests; i++ {
+			op.AddRequest(i)
+		}
+
+		done := make(chan Metrics, 1)
+		go func() { done <- op.Wait() }()
+
+		select {
+		case m := <-done:
+			if m.OperationsTotal != requests {
+				t.Errorf("got %d results, want %d", m.OperationsTotal, requests)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("pool stopped serving requests after panics: workers were lost")
+		}
+	})
+
 	t.Run("calcTimeSum excludes errors", func(t *testing.T) {
 		wp := New(context.Background(), func(_ context.Context, req int) (int, error) {
 			if req%2 == 0 {
